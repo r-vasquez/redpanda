@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"buf.build/gen/go/redpandadata/cloud/connectrpc/go/redpanda/api/controlplane/v1/controlplanev1connect"
@@ -86,7 +87,6 @@ Create a Shadow Link without confirmation prompt:
 					out.Exit("Shadow Link creation cancelled")
 				}
 			}
-			fmt.Println()
 
 			successMsgTmpl := "Successfully created shadow link %q with ID %q. To query the status, run:\n  'rpk shadow status %[1]v'"
 			if prof.CheckFromCloud() {
@@ -103,24 +103,31 @@ Create a Shadow Link without confirmation prompt:
 				}))
 				out.MaybeDie(err, "unable to create Shadow Link: %v", err)
 
-				isComplete, err := waitForOperation(cmd.Context(), cloudClient, op.Msg.GetOperation().GetId())
+				spinner := out.NewSpinner(cmd.Context(), "Creating Shadow Link...", out.WithElapsedTime())
+				isComplete, err := waitForOperation(cmd.Context(), cloudClient, op.Msg.GetOperation().GetId(), spinner)
 				if err != nil {
 					if oErr := new(OperationFailedError); errors.As(err, &oErr) {
-						out.Die(tryShadowLinkErrReason(cmd.Context(), cloudClient.ShadowLink, oErr))
+						spinner.Fail(tryShadowLinkErrReason(cmd.Context(), cloudClient.ShadowLink, oErr))
+						os.Exit(1)
 					}
-					out.Die("unable to confirm Shadow Link creation: %v", err)
+					spinner.Fail(fmt.Sprintf("unable to confirm Shadow Link creation: %v", err))
+					os.Exit(1)
 				}
 				if isComplete {
-					out.Exit(successMsgTmpl, slCfg.Name, op.Msg.GetOperation().GetResourceId())
+					spinner.Success(fmt.Sprintf(successMsgTmpl, slCfg.Name, op.Msg.GetOperation().GetResourceId()))
+					os.Exit(0)
 				}
+				spinner.Stop()
 				out.Exit("Shadow link creation is taking longer than expected. Please check the state of the shadow link using 'rpk shadow describe %v' and 'rpk shadow status %v'", slCfg.Name, slCfg.Name)
 			}
 			cl, err := adminapi.NewClient(cmd.Context(), fs, prof)
 			out.MaybeDie(err, "unable to initialize admin client: %v", err)
 
+			spinner := out.NewSpinner(cmd.Context(), "Creating Shadow Link...")
 			link, err := cl.ShadowLinkService().CreateShadowLink(cmd.Context(), connect.NewRequest(&adminv2.CreateShadowLinkRequest{
 				ShadowLink: shadowLinkConfigToProto(slCfg),
 			}))
+			spinner.Stop()
 			out.MaybeDie(err, "unable to create shadow link: %v", handleConnectError(err, "create", slCfg.Name))
 
 			out.Exit(successMsgTmpl, link.Msg.GetShadowLink().GetName(), link.Msg.GetShadowLink().GetUid())
